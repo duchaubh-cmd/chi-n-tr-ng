@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Gladiator Showdown</title>
+    <!-- Tích hợp Phaser 3 bao gồm cả Engine vật lý Matter.js -->
+    <script src="https://jsdelivr.net"></script>
+    <style>
+        body { margin: 0; padding: 0; background-color: #0b0b16; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif;}
+        #game-container { border: 4px solid #00f0ff; box-shadow: 0 0 30px #00f0ff; border-radius: 10px; overflow: hidden; }
+    </style>
+</head>
+<body>
+
+<div id="game-container"></div>
+
+<script>
+// Cấu hình Game Engine với đồ họa chất lượng cao và Vật lý Matter.js
+const config = {
+    type: Phaser.AUTO,
+    width: 960,
+    height: 540,
+    parent: 'game-container',
+    physics: {
+        default: 'matter',
+        matter: {
+            gravity: { y: 1.5 },
+            debug: false // Đổi thành true nếu muốn nhìn thấy các đường khung xương vật lý
+        }
+    },
+    scene: {
+        preload: preload,
+        create: create,
+        update: update
+    }
+};
+
+const game = new Phaser.Game(config);
+let player, enemy, ground;
+let cursors, spaceKey;
+let particles;
+
+function preload() {
+    // Không cần chuẩn bị file ảnh bên ngoài, chúng ta sẽ tự vẽ đồ họa chất lượng cao bằng code ngay dưới đây
+}
+
+function create() {
+    const width = this.scale.width;
+    const height = this.scale.height;
+
+    // --- 1. ĐỒ HỌA NỀN ĐẸP MẮT (Neon Arena) ---
+    let bgGraphics = this.add.graphics();
+    // Tạo bầu trời chuyển màu bầu trời huyền ảo (Gradient)
+    bgGraphics.fillGradientStyle(0x0d0d26, 0x0d0d26, 0x181842, 0x181842, 1);
+    bgGraphics.fillRect(0, 0, width, height);
+    
+    // Đấu trường La Mã phong cách Neon cường độ cao
+    bgGraphics.lineStyle(2, 0xff00ff, 0.3);
+    for(let i = 0; i < width; i += 60) {
+        bgGraphics.lineBetween(i, 200, i, height - 60);
+    }
+    // Mặt trời Neon phía sau tạo chiều sâu không gian
+    let sun = this.add.graphics();
+    sun.fillStyle(0xff00ff, 0.15);
+    sun.fillCircle(width/2, 220, 120);
+    sun.fillStyle(0x00f0ff, 0.1);
+    sun.fillCircle(width/2, 220, 140);
+
+    // --- 2. SÀN ĐẤU VẬT LÝ ---
+    ground = this.matter.add.rectangle(width / 2, height - 30, width, 60, { isStatic: true });
+    let groundGraphics = this.add.graphics();
+    groundGraphics.fillStyle(0x111125, 1);
+    groundGraphics.fillRect(0, height - 60, width, 60);
+    // Đường viền Neon phát sáng cho mặt đất
+    groundGraphics.lineStyle(4, 0x00f0ff, 1);
+    groundGraphics.lineBetween(0, height - 60, width, height - 60);
+
+    // --- 3. TẠO HIỆU ỨNG HẠT BỤI PHÁT SÁNG ---
+    particles = this.add.particles(0, 0, 'dummy', {
+        lifespan: 600,
+        speed: { min: 100, max: 200 },
+        scale: { start: 6, end: 0 },
+        blendMode: 'ADD',
+        emitting: false
+    });
+    // Tạo kết cấu chấm tròn nhỏ cho hạt bụi phát sáng
+    let pDot = this.make.graphics({x: 0, y: 0, add: false});
+    pDot.fillStyle(0x00f0ff, 1);
+    pDot.fillCircle(3, 3, 3);
+    pDot.generateTexture('glowDot', 6, 6);
+    particles.setTexture('glowDot');
+
+    // --- 4. TẠO ĐẤU SĨ (PLAYER) BẰNG VẬT LÝ KHỚP RAGDOLL ---
+    // Khối thân mình (Nhảy lò cò)
+    let bodyTex = this.make.graphics({x:0, y:0, add:false}).fillStyle(0x00f0ff, 1).fillRoundedRect(0,0,40,60, 8).generateTexture('pBody', 40, 60);
+    let headTex = this.make.graphics({x:0, y:0, add:false}).fillStyle(0xffffff, 1).fillCircle(15,15,15).generateTexture('pHead', 30, 30);
+    let swordTex = this.make.graphics({x:0, y:0, add:false}).fillStyle(0xff00ff, 1).fillRect(0,0,12,70).generateTexture('pSword', 12, 70);
+
+    // Tạo các bộ phận vật lý vật thể
+    let pBody = this.matter.add.image(300, 350, 'pBody').setFriction(0.05).setChamfer(8);
+    let pHead = this.matter.add.image(300, 290, 'pHead').setCircle(15);
+    player = pBody; // Gán gốc điều khiển vào thân mình
+
+    // Kết nối Đầu và Thân bằng khớp nối cứng (Constraint)
+    this.matter.add.constraint(pBody, pHead, 45, 1, { pointA: { x: 0, y: -25 }, pointB: { x: 0, y: 10 } });
+
+    // Kiếm Vật lý của Đấu sĩ
+    this.pSword = this.matter.add.image(350, 330, 'pSword');
+    // Khớp xoay vũ khí gắn vào thân mình (Tạo hiệu ứng vung kiếm tự do)
+    this.swordConstraint = this.matter.add.constraint(pBody, this.pSword, 30, 0.1, {
+        pointA: { x: 15, y: -10 },
+        pointB: { x: 0, y: 25 }
+    });
+
+    // --- 5. ĐỐI THỦ (ENEMY) BÊN PHẢI ---
+    let eBody = this.matter.add.image(660, 350, 'pBody').setTint(0xff3333); // Đổi phe địch sang màu đỏ
+    let eHead = this.matter.add.image(660, 290, 'pHead').setTint(0xff8888);
+    this.matter.add.constraint(eBody, eHead, 45, 1, { pointA: { x: 0, y: -25 }, pointB: { x: 0, y: 10 } });
+
+    // --- 6. PHÍM ĐIỀU KHIỂN ---
+    cursors = this.input.keyboard.createCursorKeys();
+    spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+    // Chữ hướng dẫn phong cách Cyberpunk
+    this.add.text(20, 20, "DI CHUYỂN: MŨI TÊN TRÁI / PHẢI (NHẢY LÒ CÒ)", { font: "16px Arial", fill: "#00f0ff" });
+    this.add.text(20, 45, "TẤN CÔNG VUNG KIẾM: PHÍM SPACE", { font: "16px Arial", fill: "#ff00ff" });
+}
+
+function update() {
+    // Hạn chế Đấu sĩ không bị lật ngửa thân mình quá đà (Giữ góc cân bằng như Gladihoppers)
+    player.setAngle(player.angle * 0.9); 
+
+    // --- XỬ LÝ LỐI CHƠI NHẢY LÒ CÒ (HOPPING PHYSICS) ---
+    if (Phaser.Input.Keyboard.JustDown(cursors.left)) {
+        // Nhảy lùi về sau và nảy lên một chút
+        this.matter.body.setVelocity(player.body, { x: -4, y: -7 });
+        player.setAngularVelocity(-0.1);
+        // Tạo bụi dưới chân khi nhảy
+        particles.emitParticleAt(player.x, player.y + 30);
+    } 
+    else if (Phaser.Input.Keyboard.JustDown(cursors.right)) {
+        // Nhảy tiến về phía trước lao vào kẻ địch
+        this.matter.body.setVelocity(player.body, { x: 5, y: -6 });
+        player.setAngularVelocity(0.1);
+        particles.emitParticleAt(player.x, player.y + 30);
+    }
+
+    // --- CƠ CHẾ VUNG KIẾM VẬT LÝ ---
+    if (spaceKey.isDown) {
+        // Áp dụng một lực xoắn cực mạnh làm thanh kiếm vung lên phía trước
+        this.matter.body.setAngularVelocity(this.pSword.body, 0.25);
+        this.matter.body.applyForce(this.pSword.body, {x: this.pSword.x, y: this.pSword.y}, { x: 0.005, y: -0.002 });
+    } else {
+        // Tự động kéo kiếm về vị trí phòng thủ thủ thế ban đầu
+        this.pSword.setAngle(this.pSword.angle * 0.95);
+    }
+}
+</script>
+
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Gladiator Showdown</title>
+    <!-- Tích hợp Phaser 3 bao gồm cả Engine vật lý Matter.js -->
+    <script src="https://jsdelivr.net"></script>
+    <style>
+        body { margin: 0; padding: 0; background-color: #0b0b16; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif;}
+        #game-container { border: 4px solid #00f0ff; box-shadow: 0 0 30px #00f0ff; border-radius: 10px; overflow: hidden; }
+    </style>
+</head>
+<body>
+
+<div id="game-container"></div>
+
+<script>
+// Cấu hình Game Engine với đồ họa chất lượng cao và Vật lý Matter.js
+const config = {
+    type: Phaser.AUTO,
+    width: 960,
+    height: 540,
+    parent: 'game-container',
+    physics: {
+        default: 'matter',
+        matter: {
+            gravity: { y: 1.5 },
+            debug: false // Đổi thành true nếu muốn nhìn thấy các đường khung xương vật lý
+        }
+    },
+    scene: {
+        preload: preload,
+        create: create,
+        update: update
+    }
+};
+
+const game = new Phaser.Game(config);
+let player, enemy, ground;
+let cursors, spaceKey;
+let particles;
+
+function preload() {
+    // Không cần chuẩn bị file ảnh bên ngoài, chúng ta sẽ tự vẽ đồ họa chất lượng cao bằng code ngay dưới đây
+}
+
+function create() {
+    const width = this.scale.width;
+    const height = this.scale.height;
+
+    // --- 1. ĐỒ HỌA NỀN ĐẸP MẮT (Neon Arena) ---
+    let bgGraphics = this.add.graphics();
+    // Tạo bầu trời chuyển màu bầu trời huyền ảo (Gradient)
+    bgGraphics.fillGradientStyle(0x0d0d26, 0x0d0d26, 0x181842, 0x181842, 1);
+    bgGraphics.fillRect(0, 0, width, height);
+    
+    // Đấu trường La Mã phong cách Neon cường độ cao
+    bgGraphics.lineStyle(2, 0xff00ff, 0.3);
+    for(let i = 0; i < width; i += 60) {
+        bgGraphics.lineBetween(i, 200, i, height - 60);
+    }
+    // Mặt trời Neon phía sau tạo chiều sâu không gian
+    let sun = this.add.graphics();
+    sun.fillStyle(0xff00ff, 0.15);
+    sun.fillCircle(width/2, 220, 120);
+    sun.fillStyle(0x00f0ff, 0.1);
+    sun.fillCircle(width/2, 220, 140);
+
+    // --- 2. SÀN ĐẤU VẬT LÝ ---
+    ground = this.matter.add.rectangle(width / 2, height - 30, width, 60, { isStatic: true });
+    let groundGraphics = this.add.graphics();
+    groundGraphics.fillStyle(0x111125, 1);
+    groundGraphics.fillRect(0, height - 60, width, 60);
+    // Đường viền Neon phát sáng cho mặt đất
+    groundGraphics.lineStyle(4, 0x00f0ff, 1);
+    groundGraphics.lineBetween(0, height - 60, width, height - 60);
+
+    // --- 3. TẠO HIỆU ỨNG HẠT BỤI PHÁT SÁNG ---
+    particles = this.add.particles(0, 0, 'dummy', {
+        lifespan: 600,
+        speed: { min: 100, max: 200 },
+        scale: { start: 6, end: 0 },
+        blendMode: 'ADD',
+        emitting: false
+    });
+    // Tạo kết cấu chấm tròn nhỏ cho hạt bụi phát sáng
+    let pDot = this.make.graphics({x: 0, y: 0, add: false});
+    pDot.fillStyle(0x00f0ff, 1);
+    pDot.fillCircle(3, 3, 3);
+    pDot.generateTexture('glowDot', 6, 6);
+    particles.setTexture('glowDot');
+
+    // --- 4. TẠO ĐẤU SĨ (PLAYER) BẰNG VẬT LÝ KHỚP RAGDOLL ---
+    // Khối thân mình (Nhảy lò cò)
+    let bodyTex = this.make.graphics({x:0, y:0, add:false}).fillStyle(0x00f0ff, 1).fillRoundedRect(0,0,40,60, 8).generateTexture('pBody', 40, 60);
+    let headTex = this.make.graphics({x:0, y:0, add:false}).fillStyle(0xffffff, 1).fillCircle(15,15,15).generateTexture('pHead', 30, 30);
+    let swordTex = this.make.graphics({x:0, y:0, add:false}).fillStyle(0xff00ff, 1).fillRect(0,0,12,70).generateTexture('pSword', 12, 70);
+
+    // Tạo các bộ phận vật lý vật thể
+    let pBody = this.matter.add.image(300, 350, 'pBody').setFriction(0.05).setChamfer(8);
+    let pHead = this.matter.add.image(300, 290, 'pHead').setCircle(15);
+    player = pBody; // Gán gốc điều khiển vào thân mình
+
+    // Kết nối Đầu và Thân bằng khớp nối cứng (Constraint)
+    this.matter.add.constraint(pBody, pHead, 45, 1, { pointA: { x: 0, y: -25 }, pointB: { x: 0, y: 10 } });
+
+    // Kiếm Vật lý của Đấu sĩ
+    this.pSword = this.matter.add.image(350, 330, 'pSword');
+    // Khớp xoay vũ khí gắn vào thân mình (Tạo hiệu ứng vung kiếm tự do)
+    this.swordConstraint = this.matter.add.constraint(pBody, this.pSword, 30, 0.1, {
+        pointA: { x: 15, y: -10 },
+        pointB: { x: 0, y: 25 }
+    });
+
+    // --- 5. ĐỐI THỦ (ENEMY) BÊN PHẢI ---
+    let eBody = this.matter.add.image(660, 350, 'pBody').setTint(0xff3333); // Đổi phe địch sang màu đỏ
+    let eHead = this.matter.add.image(660, 290, 'pHead').setTint(0xff8888);
+    this.matter.add.constraint(eBody, eHead, 45, 1, { pointA: { x: 0, y: -25 }, pointB: { x: 0, y: 10 } });
+
+    // --- 6. PHÍM ĐIỀU KHIỂN ---
+    cursors = this.input.keyboard.createCursorKeys();
+    spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+    // Chữ hướng dẫn phong cách Cyberpunk
+    this.add.text(20, 20, "DI CHUYỂN: MŨI TÊN TRÁI / PHẢI (NHẢY LÒ CÒ)", { font: "16px Arial", fill: "#00f0ff" });
+    this.add.text(20, 45, "TẤN CÔNG VUNG KIẾM: PHÍM SPACE", { font: "16px Arial", fill: "#ff00ff" });
+}
+
+function update() {
+    // Hạn chế Đấu sĩ không bị lật ngửa thân mình quá đà (Giữ góc cân bằng như Gladihoppers)
+    player.setAngle(player.angle * 0.9); 
+
+    // --- XỬ LÝ LỐI CHƠI NHẢY LÒ CÒ (HOPPING PHYSICS) ---
+    if (Phaser.Input.Keyboard.JustDown(cursors.left)) {
+        // Nhảy lùi về sau và nảy lên một chút
+        this.matter.body.setVelocity(player.body, { x: -4, y: -7 });
+        player.setAngularVelocity(-0.1);
+        // Tạo bụi dưới chân khi nhảy
+        particles.emitParticleAt(player.x, player.y + 30);
+    } 
+    else if (Phaser.Input.Keyboard.JustDown(cursors.right)) {
+        // Nhảy tiến về phía trước lao vào kẻ địch
+        this.matter.body.setVelocity(player.body, { x: 5, y: -6 });
+        player.setAngularVelocity(0.1);
+        particles.emitParticleAt(player.x, player.y + 30);
+    }
+
+    // --- CƠ CHẾ VUNG KIẾM VẬT LÝ ---
+    if (spaceKey.isDown) {
+        // Áp dụng một lực xoắn cực mạnh làm thanh kiếm vung lên phía trước
+        this.matter.body.setAngularVelocity(this.pSword.body, 0.25);
+        this.matter.body.applyForce(this.pSword.body, {x: this.pSword.x, y: this.pSword.y}, { x: 0.005, y: -0.002 });
+    } else {
+        // Tự động kéo kiếm về vị trí phòng thủ thủ thế ban đầu
+        this.pSword.setAngle(this.pSword.angle * 0.95);
+    }
+}
+</script>
+
+</body>
+</html>
